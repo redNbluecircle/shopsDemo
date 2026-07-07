@@ -83,6 +83,7 @@ function NoobEntity.new(): NoobEntity?
 	return (selfInstance :: any) :: NoobEntity
 end
 
+-- A function that will be used periodically to eliminate lags from NPCs
 function NoobEntity.ResetNetworkOwner(Npc: Instance)
 	task.spawn(function()
 		while Npc:IsDescendantOf(workspace) == false do Npc.AncestryChanged:Wait() end
