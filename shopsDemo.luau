@@ -4,17 +4,15 @@
 -- Services
 local ServerStorage = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CollectionService = game:GetService("CollectionService")
 local PhysicsService = game:GetService("PhysicsService")
-local ServerScriptService = game:GetService("ServerScriptService")
 local Lighting = game:GetService("Lighting")
 local TweenService = game:GetService("TweenService")
-
+local RunService = game:GetService("RunService")
 -- Folders
 local StartEndFolder:Folder = workspace:WaitForChild("StartEnd")
 local ShopsFolder:Folder = workspace:WaitForChild("Shops")
-local BenchesFolder:Folder = workspace:WaitForChild("Benches")
 local PosGoFolder:Folder = workspace:WaitForChild("PosGo")
-local ClicksFolder:Folder = workspace:WaitForChild("Clicks")
 local InShopFolder:Folder = ServerStorage:FindFirstChild("InShop")
 
 local PStart = StartEndFolder:WaitForChild("PStart") :: BasePart
@@ -40,19 +38,66 @@ local ShirtsList = {398635080, 144076357, 398633582, 382537084, 3670737443, 3825
 local PantsList = {129459076, 129458425, 382538502, 398635336, 398633811, 398634485, 7231091107, 144076511, 382537805}
 
 -- Collisions
-pcall(function()
-	PhysicsService:RegisterCollisionGroup("Noobs")
-end)
+PhysicsService:RegisterCollisionGroup("Noobs")
 PhysicsService:CollisionGroupSetCollidable("Noobs", "Noobs", false)
+for _, Part in Noob:GetDescendants() do if Part:IsA("BasePart") then Part.CollisionGroup = "Noobs" end end
 
-for _, Part in Noob:GetDescendants() do 
-	if Part:IsA("BasePart") then
-		Part.CollisionGroup = "Noobs"
+
+-- NPC system is made through Metatables
+local NoobEntity = {}
+NoobEntity.__index = NoobEntity
+
+-- Declaring a strong type for our NPC object so that Luau's typing doesn't complain
+export type NoobEntity = {
+	Instance: Model,
+	Humanoid: Humanoid,
+	Balance: IntValue,
+	Customize: (self: NoobEntity) -> (),
+	FlashHeadColor: (self: NoobEntity, TargetColor: Color3, Duration: number) -> (),
+	ConductShopping: (self: NoobEntity, Shop: Instance, Cost: number, ShopIndex: number) -> (),
+	HandleBenchSitting: (self: NoobEntity, Bench: Instance) -> (),
+	Route: (self: NoobEntity) -> (),
+}
+
+-- Function that's create a new NPC. NoobEntity with a question mark because 'Nil' might return
+function NoobEntity.new(): NoobEntity?
+	local TemplateBalance = Noob:FindFirstChild("Balance") :: IntValue
+	if TemplateBalance then TemplateBalance.Value = 20 + Day.Value * 2 end
+
+	local Npc = Noob:Clone()
+	local NpcHumanoid = Npc:FindFirstChildOfClass("Humanoid")
+	local NpcBalance = Npc:FindFirstChild("Balance") :: IntValue
+
+	if not NpcHumanoid or not NpcBalance then 
+		Npc:Destroy()
+		return nil 
 	end
+
+	-- Fill the table with properties so that Luau doesn't complain about adding new keys
+	local selfInstance = setmetatable({
+		Instance = Npc,
+		Humanoid = NpcHumanoid,
+		Balance = NpcBalance,
+	}, NoobEntity)
+
+	return (selfInstance :: any) :: NoobEntity
+end
+
+function NoobEntity.ResetNetworkOwner(Npc: Instance)
+	task.spawn(function()
+		while Npc:IsDescendantOf(workspace) == false do Npc.AncestryChanged:Wait() end
+
+		for _, Part in Npc:GetDescendants() do
+			if not Part:IsA("BasePart") then continue end
+			local BasePartInstance = Part :: BasePart
+			BasePartInstance:SetNetworkOwner(nil)
+		end
+	end)
 end
 
 -- NPC Customization
-local function CustomizeNpc(Npc: Model)
+function NoobEntity.Customize(self: NoobEntity)
+	local Npc = self.Instance
 	if #HairTable > 0 then
 		local Hair = HairTable[math.random(1, #HairTable)]:Clone()
 		Hair.Parent = Npc
@@ -65,33 +110,26 @@ local function CustomizeNpc(Npc: Model)
 	local PantsInstance = Instance.new("Pants")
 	PantsInstance.PantsTemplate = "rbxassetid://" .. PantsList[math.random(1, #PantsList)]
 	PantsInstance.Parent = Npc
-	
-	task.spawn(function()
-		while Npc:IsDescendantOf(workspace) == false do task.wait() end
-		
-		for _, Part in Npc:GetDescendants() do
-			if Part:IsA("BasePart") then
-				local BasePartInstance = Part :: BasePart
-				BasePartInstance:SetNetworkOwner(nil)
-			end
-		end
-	end)	
+
+	-- Resetting NetworkOwner to prevent NPCs from lagging to the player
+	NoobEntity.ResetNetworkOwner(Npc)
 end
 
-local function FlashHeadColor(Npc: Model, TargetColor: Color3, Duration: number)
-	local Head = Npc:FindFirstChild("Head") :: BasePart
+-- If the buyer likes something (or not), his head will change color
+function NoobEntity.FlashHeadColor(self: NoobEntity, TargetColor: Color3, Duration: number)
+	local Head = self.Instance:FindFirstChild("Head") :: BasePart
 	if not Head then return end
-	
+
 	local OldColor = Head.Color
 	Head.Color = TargetColor
 	task.wait(Duration)
 	Head.Color = OldColor
 end
 
-local function ConductShopping(Npc: Model, NpcHumanoid: Humanoid, Shop: Instance, Cost: number, ShopIndex: number)
+-- In-store shopping function
+function NoobEntity.ConductShopping(self: NoobEntity, Shop: Instance, Cost: number, ShopIndex: number)
 	local ShopNoobs = Shop:FindFirstChild("Noobs") :: IntValue
-	local NpcBalance = Npc:FindFirstChild("Balance") :: IntValue
-	if not ShopNoobs or not NpcBalance then return end
+	if not ShopNoobs then return end
 
 	ShopNoobs.Value += 1
 
@@ -99,26 +137,32 @@ local function ConductShopping(Npc: Model, NpcHumanoid: Humanoid, Shop: Instance
 	if RandomTarget then
 		local CenterPart = RandomTarget:FindFirstChild("Center") :: BasePart
 		if CenterPart then
-			NpcHumanoid:MoveTo(CenterPart.Position - Vector3.new(4, 0, 0))
+			self.Humanoid:MoveTo(CenterPart.Position - Vector3.new(4, 0, 0))
 		end
 	end
-	NpcHumanoid.MoveToFinished:Wait()
-
-	Npc.Parent = ServerStorage:FindFirstChild("InShop")
+	self.Humanoid.MoveToFinished:Wait()
+	
+	self.Instance.Parent = InShopFolder
 	task.wait(ShopIndex * 1.5)
 
 	Balance.Value += Cost
-	NpcBalance.Value -= Cost
-	Npc.Parent = NoobsOnMap
+	self.Balance.Value -= Cost
+	self.Instance.Parent = NoobsOnMap
+
+	-- Resetting NetworkOwner to prevent NPCs from lagging to the player again
+	NoobEntity.ResetNetworkOwner(self.Instance)
+
 	ShopNoobs.Value -= 1
 end
 
-local function HandleBenchSitting(Npc: Model, NpcHumanoid: Humanoid, Bench: Instance)
+-- Bench sitting function
+function NoobEntity.HandleBenchSitting(self: NoobEntity, Bench: Instance)
 	local SelectedSeat: Seat? = nil
 	local Attempts = 0
 	local BenchSeats = Bench:FindFirstChild("Seats") :: IntValue
 	if not BenchSeats then return end
 
+	-- Find an available seat (10 Attempts to eliminate coincidences when another customer leaves)
 	while not SelectedSeat and Attempts < 10 do
 		Attempts += 1
 		local PotentialSeat = Bench:FindFirstChild(tostring(math.random(1, 3))) :: Seat
@@ -126,115 +170,114 @@ local function HandleBenchSitting(Npc: Model, NpcHumanoid: Humanoid, Bench: Inst
 			SelectedSeat = PotentialSeat
 			SelectedSeat.Color = Color3.fromRGB(255, 255, 255)
 		end
-
-		local Seat1 = Bench:FindFirstChild("1") :: Seat
-		local Seat2 = Bench:FindFirstChild("2") :: Seat
-		local Seat3 = Bench:FindFirstChild("3") :: Seat
-		if Seat1 and Seat2 and Seat3 and Seat1.Occupant and Seat2.Occupant and Seat3.Occupant then
-			break
+		
+		local allOccupied = true
+		for i = 1, 3 do
+			local Seat = Bench:FindFirstChild(tostring(i)) :: Seat
+			if not Seat or Seat.Occupant then continue end 
+			
+			allOccupied = false 
+			break 
 		end
+		
+		if allOccupied then break end 
 	end
 
 	if not SelectedSeat then return end
 
 	BenchSeats.Value += 1
-	NpcHumanoid:MoveTo(SelectedSeat.Position + Vector3.new(5, 0, 0))
-	NpcHumanoid.MoveToFinished:Wait()
+	self.Humanoid:MoveTo(SelectedSeat.Position + Vector3.new(5, 0, 0))
+	self.Humanoid.MoveToFinished:Wait()
 
-	SelectedSeat:Sit(NpcHumanoid)
+	SelectedSeat:Sit(self.Humanoid)
 	task.wait(2)
 
 	SelectedSeat.Color = Color3.fromRGB(124, 92, 70)
-	NpcHumanoid.Jump = true
-	Npc:MoveTo(SelectedSeat.Position + Vector3.new(5, 0, 0))
+	self.Humanoid.Jump = true
+	self.Instance:MoveTo(SelectedSeat.Position + Vector3.new(5, 0, 0))
+
+	NoobEntity.ResetNetworkOwner(self.Instance)
 	BenchSeats.Value -= 1
 end
 
 -- Main route handler
-local function NoobRoute()
-	local TemplateBalance = Noob:FindFirstChild("Balance") :: IntValue
-	if TemplateBalance then
-		TemplateBalance.Value = 20 + Day.Value * 2
-	end
+function NoobEntity.Route(self: NoobEntity)
+	self:Customize() -- Apply random clothes
 
-	local Npc = Noob:Clone()
-	local NpcHumanoid = Npc:FindFirstChildOfClass("Humanoid")
-	local NpcBalance = Npc:FindFirstChild("Balance") :: IntValue
-	if not NpcHumanoid or not NpcBalance then return end
+	self.Instance:MoveTo(PStart.Position)
+	self.Instance.Parent = NoobsOnMap
+	self.Humanoid.WalkSpeed = math.random(self.Humanoid.WalkSpeed + 6, self.Humanoid.WalkSpeed + 15)
 
-	CustomizeNpc(Npc)
-
-	Npc:MoveTo(PStart.Position)
-	Npc.Parent = NoobsOnMap
-	NpcHumanoid.WalkSpeed = math.random(NpcHumanoid.WalkSpeed + 6, NpcHumanoid.WalkSpeed + 15)
-
+	-- Main route loop (6 because there are 6 stores)
 	for Index = 1, 6 do
 		local Shop = ShopsFolder:FindFirstChild(tostring(Index))
-		if not Shop then continue end 
+		if not Shop then continue end
 
 		local ShopNoobs = Shop:FindFirstChild("Noobs") :: IntValue
 		local ShopLim = Shop:FindFirstChild("Lim") :: IntValue
 		if not ShopNoobs or not ShopLim then continue end
 
 		local ShoppingCost = CostValues[Index]
+		local IsBroke = self.Balance.Value < ShoppingCost
 
+		-- Move to the current shop position
 		local TargetPosGo = PosGoFolder:FindFirstChild(tostring(Index)) :: BasePart
-		if TargetPosGo then
-			NpcHumanoid:MoveTo(TargetPosGo.Position)
+		if TargetPosGo then self.Humanoid:MoveTo(TargetPosGo.Position) end
+		self.Humanoid.MoveToFinished:Wait()
+
+		-- Attempt to enter the shop if capacity allows
+		if ShopNoobs.Value < ShopLim.Value then
+			local FinalCost = if IsBroke then self.Balance.Value else ShoppingCost
+			self:ConductShopping(Shop, FinalCost, Index)
+
+			if IsBroke then break end -- Shopping finished, NPC leaves
+			continue
 		end
-		NpcHumanoid.MoveToFinished:Wait()
 
-		if NpcBalance.Value >= ShoppingCost then
-			if ShopNoobs.Value < ShopLim.Value then
-				ConductShopping(Npc, NpcHumanoid, Shop, ShoppingCost, Index)
-			else
-				local Bench = BenchesFolder:FindFirstChild(tostring(Index))
-				if Bench and not Bench:FindFirstChild("BuyPart") then
-					local BenchSeats = Bench:FindFirstChild("Seats") :: IntValue
-					
-					if BenchSeats and BenchSeats.Value <= 2 then
-						HandleBenchSitting(Npc, NpcHumanoid, Bench)
-						if ShopNoobs.Value < ShopLim.Value then
-							ConductShopping(Npc, NpcHumanoid, Shop, ShoppingCost, Index)
-						end
-					else
-						FlashHeadColor(Npc, Color3.fromRGB(255, 0, 0), 1)
-					end
-				else
-					FlashHeadColor(Npc, Color3.fromRGB(255, 0, 0), 0.5)
-				end
-			end
-		else
-			FlashHeadColor(Npc, Color3.fromRGB(0, 255, 0), 1)
-			ShopNoobs.Value += 1
-
-			local RandomTarget = Shop:FindFirstChild(tostring(math.random(1, 3))) :: Model
-			if RandomTarget then
-				local CenterPart = RandomTarget:FindFirstChild("Center") :: BasePart
-				if CenterPart then
-					NpcHumanoid:MoveTo(CenterPart.Position - Vector3.new(3, 0, 0))
-				end
-			end
-			NpcHumanoid.MoveToFinished:Wait()
-
-			Npc.Parent = ServerStorage:FindFirstChild("InShop")
-			task.wait(Index * 1.5)
-
-			Balance.Value += NpcBalance.Value
-			NpcBalance.Value = 0
-			Npc.Parent = NoobsOnMap
-			ShopNoobs.Value -= 1
-			break 
+		-- If shop is full, handle bench queuing logic
+		local Bench
+		for _, CheckingBench in ipairs(CollectionService:GetTagged("Bench")) do
+			if CheckingBench.Name == tostring(Index) then Bench = CheckingBench break end
 		end
+
+		-- Skip if bench doesn't exist or isn't purchased
+		if not Bench or Bench:FindFirstChild("BuyPart") then
+			self:FlashHeadColor(Color3.fromRGB(255, 0, 0), 0.5)
+			if IsBroke then break end
+			continue
+		end
+
+		-- Check for available seats
+		local BenchSeats = Bench:FindFirstChild("Seats") :: IntValue
+		if not BenchSeats or BenchSeats.Value > 2 then
+			self:FlashHeadColor(Color3.fromRGB(255, 0, 0), 1)
+			if IsBroke then break end
+			continue
+		end
+
+		-- Wait for seat availability
+		self:HandleBenchSitting(Bench)
+
+		-- Post-wait attempt to enter shop
+		if ShopNoobs.Value < ShopLim.Value then
+			local FinalCost = if IsBroke then self.Balance.Value else ShoppingCost
+			self:ConductShopping(Shop, FinalCost, Index)
+		end
+
+		-- If NPC is broke, they exit after the bench wait regardless
+		if IsBroke then break end
 	end
 
-	NpcHumanoid.WalkSpeed += 15
-	NpcHumanoid:MoveTo(PEnd.Position)
-	NpcHumanoid.MoveToFinished:Wait()
-	Npc:Destroy()
+	-- Exit simulation sequence
+	self.Humanoid.WalkSpeed += 15
+	self.Humanoid:MoveTo(PEnd.Position)
+	self.Humanoid.MoveToFinished:Wait()
+	self.Instance:Destroy()
 end
 
--- Events
+----------
+
+-- Day start trigger
 NoobsOnMap.ChildAdded:Connect(function()
 	DayGoing.Value = true
 end)
@@ -245,6 +288,7 @@ NoobsOnMap.ChildRemoved:Connect(function()
 	end
 end)
 
+-- New day event, that starts new customers flow 
 NewDay.OnServerEvent:Connect(function()
 	if #NoobsOnMap:GetChildren() == 0 and InShopFolder and #InShopFolder:GetChildren() == 0 then 
 		DayGoing.Value = false
@@ -258,7 +302,7 @@ NewDay.OnServerEvent:Connect(function()
 	Lighting.ClockTime = math.random(7, 19) + (math.random(0, 59) / 60)
 
 	ReplicatedStorage.Dayfire:FireAllClients(Day.Value)
-	
+
 	local OldColor = MPart.Color 
 	MPart.Color = Color3.fromRGB(math.random(1, 255), math.random(1, 255), math.random(1, 255))
 	task.wait(0.5)
@@ -267,40 +311,65 @@ NewDay.OnServerEvent:Connect(function()
 	if Day.Value % 5 == 0 then NoobsVal += 2 end
 
 	for Index = 1, NoobsVal do
-		task.spawn(NoobRoute)
+		task.spawn(function()
+			local Npc = NoobEntity.new()
+			if Npc then
+				Npc:Route()
+			end
+		end)
 		task.wait(0.5)
 	end
 end)
 
 -- Building animations
 function BuildingAnimation(Building: Model, Duration: number)
-	local TimeMin, TimeMax = Duration - math.random(1, 10) / 10, Duration
-	if TimeMin < 0 then TimeMin = 0 end
+	local TimeMin = math.max(0, Duration - 1)
+	local TimeMax = Duration
 
 	for _, Child in Building:GetDescendants() do
 		if Child:IsA("Model") then continue end
-		if Child:IsA("SurfaceGui") then 
-			local Gui = Child :: SurfaceGui
-			Gui.Enabled = false 
-		end
+		if Child:IsA("SurfaceGui") then Child.Enabled = false end
 
+		-- Smooth animation using CFrame for parts, other things are left with TweenService animations
 		task.spawn(function()
 			if Child:IsA("BasePart") then
-				local OriginalTransparency = Child.Transparency
-				local OriginalSize = Child.Size
+				local Part = Child :: BasePart
+				local TargetCFrame = Part.CFrame
+				local OriginalTransparency = Part.Transparency
 
-				Child.Transparency = 1
-				Child.Size = OriginalSize + Vector3.new(math.random(1, 5), math.random(1, 5), math.random(1, 5))
-				task.wait()
+				-- Calculating randomized origin points and rotational angles
+				local RandomOffset = Vector3.new(math.random(-30, 30), math.random(20, 50), math.random(-30, 30))
 
-				local CustomTweenInfo = TweenInfo.new(math.random(TimeMin, TimeMax), Enum.EasingStyle.Linear, Enum.EasingDirection.In)
-				local Tween = TweenService:Create(Child, CustomTweenInfo, {Transparency = OriginalTransparency, Size = OriginalSize})
-				Tween:Play()
-				Tween.Completed:Wait()
-				Tween:Destroy()
+				local RandomRotation = CFrame.Angles(math.rad(math.random(0, 360)), math.rad(math.random(0, 360)), math.rad(math.random(0, 360)))
+
+				-- Apply initial state
+				Part.CFrame = CFrame.new(TargetCFrame.Position + RandomOffset) * RandomRotation
+				Part.Transparency = 1
+
+				local AnimDuration = math.random(TimeMin * 10, TimeMax * 10) / 10
+				local ElapsedTimeValue = 0
+				local Connection: RBXScriptConnection
+
+				-- RunService loop for manual CFrame interpolation
+				Connection = RunService.Heartbeat:Connect(function(DeltaTime)
+					ElapsedTimeValue += DeltaTime
+					local Alpha = math.clamp(ElapsedTimeValue / AnimDuration, 0, 1) -- Normalize time between 0 and 1
+					local EasedAlpha = Alpha * Alpha * (3 - 2 * Alpha) -- Smoothing for fluid motion
+
+					-- CFrame lerp operation bridging origin and target
+					Part.CFrame = Part.CFrame:Lerp(TargetCFrame, EasedAlpha)
+					Part.Transparency = 1 - (1 - OriginalTransparency) * EasedAlpha
+
+					-- Animation termination and cleanup
+					if Alpha >= 1 then
+						Part.CFrame = TargetCFrame
+						Part.Transparency = OriginalTransparency
+						Connection:Disconnect()
+					end
+				end)
 			elseif Child:IsA("Decal") or Child:IsA("Texture") then
 				Child.Transparency = 1
-				local CustomTweenInfo = TweenInfo.new(math.random(TimeMin, TimeMax), Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+				local CustomTweenInfo = TweenInfo.new(math.random(TimeMin * 10, TimeMax * 10) / 10, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 				local Tween = TweenService:Create(Child, CustomTweenInfo, {Transparency = 0})
 				Tween:Play()
 				Tween.Completed:Wait()
@@ -313,8 +382,8 @@ function BuildingAnimation(Building: Model, Duration: number)
 	end
 end
 
--- Shop buying logic
-for _, Button:BasePart in ClicksFolder:GetChildren() do
+-- Shop buying logic (Through CollectionService, so that if the folder name changes, the code remains working)
+for _, Button:BasePart in (CollectionService:GetTagged("BuyShopPart")) do
 	local Cost = Button:FindFirstChild("Cost") :: IntValue
 	local ClickDetector = Button:FindFirstChild("ClickDetector") :: ClickDetector
 	local SurfaceGui = Button:FindFirstChild("SurfaceGui") :: SurfaceGui
@@ -343,8 +412,8 @@ for _, Button:BasePart in ClicksFolder:GetChildren() do
 	end)
 end
 
--- Benches
-for _, Bench:Model in BenchesFolder:GetChildren() do
+-- Benches buying logic (Same with CollectionService, as with shop buying logic)
+for _, Bench:Model in (CollectionService:GetTagged("Bench")) do
 	local BuyPart = Bench:FindFirstChild("BuyPart") :: BasePart
 
 	if not BuyPart then continue end
@@ -359,10 +428,10 @@ for _, Bench:Model in BenchesFolder:GetChildren() do
 		Balance.Value -= Cost.Value
 
 		for _, Child in Bench:GetChildren() do
-			if Child:IsA("BasePart") and not Child:IsA("Seat") then 
-				local Part:BasePart = Child
-				Part.Transparency = 0 
-			end
+			if not Child:IsA("BasePart") or Child:IsA("Seat") then continue end 
+
+			local Part:BasePart = Child
+			Part.Transparency = 0
 		end
 
 		BuyPart:Destroy()
