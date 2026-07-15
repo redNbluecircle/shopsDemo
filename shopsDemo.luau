@@ -71,7 +71,7 @@ export type NoobEntity = {
 --[[
 	Constructor: Initializes a new NPC
 	
-	Reasoning: We dynamically scale the initial balance based on the current 'Day' to maintain 
+	Reasoning: Dynamically scaling the initial balance based on the current 'Day' to maintain 
 	economic balance as the player progresses and unlocks more expensive shops.
 ]]
 function NoobEntity.new(): NoobEntity?
