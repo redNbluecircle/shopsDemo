@@ -244,9 +244,20 @@ function NoobEntity.Route(self: NoobEntity)
 	self.Instance:MoveTo(PStart.Position)
 	self.Instance.Parent = NoobsOnMap
 	self.Humanoid.WalkSpeed = math.random(self.Humanoid.WalkSpeed + 6, self.Humanoid.WalkSpeed + 15)
+	
+	local ShopOrder = {1, 2, 3, 4, 5, 6}
+	
+	-- For variety, every 2 days customers will go to stores in a different order
+	if Day.Value % 2 == 0 or Day.Value == 0 then
+		-- Generating a randomized order of 6 stores indices (4, 1, 6, 2, 5, 3)
+		for i = #ShopOrder, 2, -1 do
+			local j = math.random(i)
+			ShopOrder[i], ShopOrder[j] = ShopOrder[j], ShopOrder[i]
+		end
+	end
 
-	-- Main route loop (6 because there are 6 stores)
-	for Index = 1, 6 do
+	-- Main route loop through the randomized shops sequence
+	for _, Index in ipairs(ShopOrder) do
 		local Shop = ShopsFolder:FindFirstChild(tostring(Index))
 		if not Shop then continue end
 
@@ -257,9 +268,9 @@ function NoobEntity.Route(self: NoobEntity)
 		local ShoppingCost = CostValues[Index]
 		local IsBroke = self.Balance.Value < ShoppingCost
 
-		-- Move to the current shop position
+		-- Move to the current shop position (Slightly modified so that the NPC path is different)
 		local TargetPosGo = PosGoFolder:FindFirstChild(tostring(Index)) :: BasePart?
-		if TargetPosGo then self:NavigateTo(TargetPosGo.Position) end
+		if TargetPosGo then self:NavigateTo(TargetPosGo.Position + Vector3.new(math.random(-2, 2), 0, math.random(-2, 2))) end
 
 		-- Attempt to enter the shop if capacity allows
 		if ShopNoobs.Value < ShopLim.Value then
