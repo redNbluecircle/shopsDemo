@@ -17,6 +17,7 @@ local StartEndFolder:Folder = workspace.StartEnd
 local ShopsFolder:Folder = workspace.Shops
 local PosGoFolder:Folder = workspace.PosGo
 local CoinsFolder:Folder = workspace.CoinsFolder
+local NoobsOnMap:Folder = workspace.NoobsOnMap
 local InShopFolder:Folder = ServerStorage.InShop
 
 local PStart1 = StartEndFolder:WaitForChild("PStart1") :: BasePart
@@ -25,7 +26,6 @@ local PEnd = StartEndFolder:WaitForChild("PEnd") :: BasePart
 
 -- Variables
 local NewDay:RemoteEvent = ReplicatedStorage:WaitForChild("NewDay")
-local NoobsOnMap:Folder = workspace:WaitForChild("NoobsOnMap")
 local Noob:Model = ServerStorage:WaitForChild("Noob")
 local MPart:BasePart = workspace:WaitForChild("MPart")
 local CoinsZonePart = workspace:WaitForChild("CoinsZonePart") :: BasePart
@@ -435,7 +435,7 @@ local function GetRandomPointInZone(ZonePart: BasePart): Vector3
 	return ZonePart.CFrame:PointToWorldSpace(RandomOffset)
 end
 
--- [[Function to spawn a coin at the random point in the CoinsZone, created for more NPC's interactions with the world (not only shops and benches)
+-- Function to spawn a coin at the random point in the CoinsZone, created for more NPC's interactions with the world (not only shops and benches)
 function SpawnCoin()
 	local Coin: BasePart = ServerStorage.Coin:Clone()
 	local RandomPoint = GetRandomPointInZone(CoinsZonePart)
