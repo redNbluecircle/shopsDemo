@@ -97,7 +97,9 @@ function NoobEntity.new(): NoobEntity?
 			selfInstance:CollectCoin(Coin)
 		end
 	end)
-
+	
+	Npc:SetAttribute("IsDiverted", false)
+	
 	return (selfInstance :: any) :: NoobEntity
 end
 
@@ -148,6 +150,7 @@ end
 function NoobEntity.CollectCoin(self: NoobEntity, Coin: BasePart)
 	if self.IsDiverted then return end
 	self.IsDiverted = true -- Pausing the main route to complete this function
+	self.Instance:SetAttribute("IsDiverted", true)
 
 	self.Humanoid:MoveTo(Coin.Position)
 	self.Humanoid.MoveToFinished:Wait()
@@ -158,6 +161,9 @@ function NoobEntity.CollectCoin(self: NoobEntity, Coin: BasePart)
 	end
 
 	self.IsDiverted = false
+	if self.Instance and self.Instance.Parent then
+		self.Instance:SetAttribute("IsDiverted", false)
+	end
 end
 
 -- Advanced navigation using PathfindService to calculate waypoints (Instead of direct MoveTo, like it was before).
@@ -376,14 +382,18 @@ NoobsOnMap.ChildRemoved:Connect(function()
 end)
 
 -- The next day start handler, which starts the customer flow and makes other changes
+local NewDayDebounce:boolean = false
 NewDay.OnServerEvent:Connect(function()
+	if NewDayDebounce then return end
 	if #NoobsOnMap:GetChildren() == 0 and InShopFolder and #InShopFolder:GetChildren() == 0 then
 		DayGoing.Value = false
 	end
 
 	-- Stopping the beginning of a new day if the previous one is active
 	if DayGoing.Value == true then return end
-
+	NewDayDebounce = true
+	task.delay(3, function() NewDayDebounce = false end)
+	
 	DayGoing.Value = true
 	Day.Value += 1
 
@@ -441,20 +451,28 @@ function SpawnCoin()
 			Coin.CFrame *= CFrame.Angles(0, 0, math.rad(90 * DeltaTime))
 
 			-- If the coin is free - it's looking for closest customer
-			if not Coin:GetAttribute("Targeted") then return end
 			for _, Npc in NoobsOnMap:GetChildren() do
+				if Npc:GetAttribute("IsDiverted") then continue end
+				
 				local RootPart = Npc:FindFirstChild("HumanoidRootPart") :: BasePart?
 
 				-- Checking radius
-				if not (RootPart and (RootPart.Position - Coin.Position).Magnitude <= 15) then return end
+				if not (RootPart and (RootPart.Position - Coin.Position).Magnitude <= 25) then continue end
 				local InterruptEvent = Npc:FindFirstChild("CoinInterrupt") :: BindableEvent?
 
-				if not InterruptEvent then return end
-				Coin:SetAttribute("Targeted", true)
+				if not InterruptEvent then continue end
+				Coin:SetAttribute("Targeted", true) -- Enabling coin debounce
+
+				-- If NPC in 8 seconds didn't took the coin, debounce is disabled
+				task.delay(8, function()
+					if not (Coin and Coin.Parent) then return end
+					Coin:SetAttribute("Targeted", false)
+				end)
+
 				task.spawn(function()
 					InterruptEvent:Fire(Coin)
 				end)
-				
+
 				break
 			end
 		end)
