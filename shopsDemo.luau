@@ -3,6 +3,7 @@
 
 -- Services
 local ServerStorage = game:GetService("ServerStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CollectionService = game:GetService("CollectionService")
 local PhysicsService = game:GetService("PhysicsService")
@@ -11,13 +12,15 @@ local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local PathfindingService = game:GetService("PathfindingService")
 
--- Folders
-local StartEndFolder:Folder = workspace:WaitForChild("StartEnd")
-local ShopsFolder:Folder = workspace:WaitForChild("Shops")
-local PosGoFolder:Folder = workspace:WaitForChild("PosGo")
-local InShopFolder:Folder? = ServerStorage:FindFirstChild("InShop") :: Folder?
+-- Folders (WaitForChild removed, because folders are loading before this script runs)
+local StartEndFolder:Folder = workspace.StartEnd
+local ShopsFolder:Folder = workspace.Shops
+local PosGoFolder:Folder = workspace.PosGo
+local CoinsFolder:Folder = workspace.CoinsFolder
+local InShopFolder:Folder = ServerStorage.InShop
 
-local PStart = StartEndFolder:WaitForChild("PStart") :: BasePart
+local PStart1 = StartEndFolder:WaitForChild("PStart1") :: BasePart
+local PStart2 = StartEndFolder:WaitForChild("PStart2") :: BasePart
 local PEnd = StartEndFolder:WaitForChild("PEnd") :: BasePart
 
 -- Variables
@@ -25,6 +28,7 @@ local NewDay:RemoteEvent = ReplicatedStorage:WaitForChild("NewDay")
 local NoobsOnMap:Folder = workspace:WaitForChild("NoobsOnMap")
 local Noob:Model = ServerStorage:WaitForChild("Noob")
 local MPart:BasePart = workspace:WaitForChild("MPart")
+local CoinsZonePart = workspace:WaitForChild("CoinsZonePart") :: BasePart
 
 local Day:IntValue = script:WaitForChild("Day")
 local Balance:IntValue = script:WaitForChild("Balance")
@@ -59,7 +63,8 @@ export type NoobEntity = {
 	NavigateTo: (self: NoobEntity, TargetPos: Vector3) -> (),
 	ConductShopping: (self: NoobEntity, Shop: Instance, Cost: number, ShopIndex: number) -> (),
 	HandleBenchSitting: (self: NoobEntity, Bench: Instance) -> (),
-	Route: (self: NoobEntity) -> (),
+	Route: (self: NoobEntity) -> (),IsDiverted: boolean,
+	CollectCoin: (self: NoobEntity, Coin: BasePart) -> (),
 }
 
 -- Constructor, that instantiates a new NPC wrapper setup with default validation checks
@@ -76,11 +81,22 @@ function NoobEntity.new(): NoobEntity?
 		return nil
 	end
 
-	local selfInstance = setmetatable({
+	local selfInstance = (setmetatable({
 		Instance = Npc,
 		Humanoid = NpcHumanoid,
 		Balance = NpcBalance,
-	}, NoobEntity)
+		IsDiverted = false,
+	}, NoobEntity) :: any) :: NoobEntity
+	
+	local CoinInterrupt = Instance.new("BindableEvent")
+	CoinInterrupt.Name = "CoinInterrupt"
+	CoinInterrupt.Parent = Npc
+
+	CoinInterrupt.Event:Connect(function(Coin: Instance)
+		if Coin:IsA("BasePart") then
+			selfInstance:CollectCoin(Coin)
+		end
+	end)
 
 	return (selfInstance :: any) :: NoobEntity
 end
@@ -128,8 +144,27 @@ function NoobEntity.FlashHeadColor(self: NoobEntity, TargetColor: Color3, Durati
 	Head.Color = OldColor
 end
 
+-- This function used for NPC to collect a coin, that's generated on the map
+function NoobEntity.CollectCoin(self: NoobEntity, Coin: BasePart)
+	if self.IsDiverted then return end
+	self.IsDiverted = true -- Pausing the main route to complete this function
+
+	self.Humanoid:MoveTo(Coin.Position)
+	self.Humanoid.MoveToFinished:Wait()
+
+	if Coin and Coin.Parent then
+		self.Balance.Value += math.random(4, 11)
+		Coin:Destroy()
+	end
+
+	self.IsDiverted = false
+end
+
 -- Advanced navigation using PathfindService to calculate waypoints (Instead of direct MoveTo, like it was before).
 function NoobEntity.NavigateTo(self: NoobEntity, TargetPos: Vector3)
+	-- If NPC is already collected a coin, this function won't continue. Otherwise, this can create a conflict.
+	if self.IsDiverted then return end
+	
 	local RootPart = self.Instance.PrimaryPart or self.Instance:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if not RootPart then
 		self.Humanoid:MoveTo(TargetPos)
@@ -151,6 +186,12 @@ function NoobEntity.NavigateTo(self: NoobEntity, TargetPos: Vector3)
 				self.Humanoid.Jump = true
 			end
 			self.Humanoid.MoveToFinished:Wait()
+			
+			-- Pause check! If during the movement coins collect function is called, this function will pause until other ones is finished
+			if self.IsDiverted then
+				while self.IsDiverted do task.wait(0.1) end
+				return self:NavigateTo(TargetPos)
+			end
 		end
 	else
 		-- Or standart MoveTo to target position
@@ -240,8 +281,10 @@ end
 -- The main function, that's  responsible for the passage of customers across the entire street visiting shops and benches
 function NoobEntity.Route(self: NoobEntity)
 	self:Customize()
-
-	self.Instance:MoveTo(PStart.Position)
+	
+	-- The NPC starts at a random point on the street
+	
+	self.Instance:PivotTo(if math.random() <= 0.5 then PStart1.CFrame else PStart2.CFrame)
 	self.Instance.Parent = NoobsOnMap
 	self.Humanoid.WalkSpeed = math.random(self.Humanoid.WalkSpeed + 6, self.Humanoid.WalkSpeed + 15)
 	
@@ -258,6 +301,10 @@ function NoobEntity.Route(self: NoobEntity)
 
 	-- Main route loop through the randomized shops sequence
 	for _, Index in ipairs(ShopOrder) do
+		-- Move to the current shop position (Slightly modified so that the NPC path is different)
+		local TargetPosGo = PosGoFolder:FindFirstChild(tostring(Index)) :: BasePart?
+		if TargetPosGo then self:NavigateTo(TargetPosGo.Position + Vector3.new(math.random(-2, 2), 0, math.random(-2, 2))) end
+		
 		local Shop = ShopsFolder:FindFirstChild(tostring(Index))
 		if not Shop then continue end
 
@@ -267,10 +314,6 @@ function NoobEntity.Route(self: NoobEntity)
 
 		local ShoppingCost = CostValues[Index]
 		local IsBroke = self.Balance.Value < ShoppingCost
-
-		-- Move to the current shop position (Slightly modified so that the NPC path is different)
-		local TargetPosGo = PosGoFolder:FindFirstChild(tostring(Index)) :: BasePart?
-		if TargetPosGo then self:NavigateTo(TargetPosGo.Position + Vector3.new(math.random(-2, 2), 0, math.random(-2, 2))) end
 
 		-- Attempt to enter the shop if capacity allows
 		if ShopNoobs.Value < ShopLim.Value then
@@ -365,7 +408,65 @@ NewDay.OnServerEvent:Connect(function()
 
 		task.wait(0.5)
 	end
+	
+	-- With 80% chance there will be some coins spawned, that customers can collect to increase their balance by 20% 
+	if math.random(1, 5) == 5 then return end
+	
+	task.delay(math.random(5, 20), function()
+		for i = 1, math.random(1, 5) do SpawnCoin() task.wait(1) end
+	end)
 end)
+
+-- Function that uses basic math to take a random point in a coins zone
+local function GetRandomPointInZone(ZonePart: BasePart): Vector3
+	local Size = ZonePart.Size
+	local RandomOffset = Vector3.new((math.random() - 0.5) * Size.X, 0, (math.random() - 0.5) * Size.Z)
+	
+	return ZonePart.CFrame:PointToWorldSpace(RandomOffset)
+end
+
+-- [[Function to spawn a coin at the random point in the CoinsZone, created for more NPC's interactions with the world (not only shops and benches)
+function SpawnCoin()
+	local Coin: BasePart = ServerStorage.Coin:Clone()
+	local RandomPoint = GetRandomPointInZone(CoinsZonePart)
+
+	if RandomPoint then
+		Coin.Position = RandomPoint + Vector3.new(0, 2, 0)
+		Coin.Anchored = true
+		Coin.CanCollide = false
+		Coin.Parent = CoinsFolder
+
+		-- Spinning + checking for customers
+		local SpinConnection = RunService.Heartbeat:Connect(function(DeltaTime: number)
+			Coin.CFrame *= CFrame.Angles(0, 0, math.rad(90 * DeltaTime))
+
+			-- If the coin is free - it's looking for closest customer
+			if not Coin:GetAttribute("Targeted") then return end
+			for _, Npc in NoobsOnMap:GetChildren() do
+				local RootPart = Npc:FindFirstChild("HumanoidRootPart") :: BasePart?
+
+				-- Checking radius
+				if not (RootPart and (RootPart.Position - Coin.Position).Magnitude <= 15) then return end
+				local InterruptEvent = Npc:FindFirstChild("CoinInterrupt") :: BindableEvent?
+
+				if not InterruptEvent then return end
+				Coin:SetAttribute("Targeted", true)
+				task.spawn(function()
+					InterruptEvent:Fire(Coin)
+				end)
+				
+				break
+			end
+		end)
+		
+		-- Cleaning connection, so there is no memory leak
+		Coin.Destroying:Connect(function()
+			if SpinConnection then SpinConnection:Disconnect() end
+		end)
+	else
+		Coin:Destroy()
+	end
+end
 
 -- Separate functions for each object type to reduce nesting
 local function AnimateBasePart(Part: BasePart, TimeMin: number, TimeMax: number)
@@ -409,7 +510,6 @@ local function AnimateDecalOrTexture(Child: Decal, TimeMin: number, TimeMax: num
 	local CustomTweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 	local Tween = TweenService:Create(Child, CustomTweenInfo, {Transparency = 0})
 
-	-- Используем Connect вместо Wait(), чтобы не блокировать поток и обойтись без task.spawn
 	Tween.Completed:Connect(function()
 		Tween:Destroy()
 	end)
