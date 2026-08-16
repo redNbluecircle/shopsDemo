@@ -3,7 +3,6 @@
 
 -- Services
 local ServerStorage = game:GetService("ServerStorage")
-local ServerScriptService = game:GetService("ServerScriptService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CollectionService = game:GetService("CollectionService")
 local PhysicsService = game:GetService("PhysicsService")
@@ -34,8 +33,7 @@ local Day:IntValue = script:WaitForChild("Day")
 local Balance:IntValue = script:WaitForChild("Balance")
 local DayGoing:BoolValue = script:WaitForChild("DayGoing")
 
-local HairFolder:Folder = ServerStorage:WaitForChild("Hairs")
-local HairTable = HairFolder:GetChildren()
+local HairTable = ServerStorage:WaitForChild("Hairs"):GetChildren()
 local NoobsVal = 8
 
 local CostValues = {10, 15, 25, 30, 40, 100}
@@ -88,16 +86,18 @@ function NoobEntity.new(): NoobEntity?
 		IsDiverted = false,
 	}, NoobEntity) :: any) :: NoobEntity
 	
+	-- Adding a coin interrupt event to the NPC (Through it, the signal for collection coin to NPC will be sent)
 	local CoinInterrupt = Instance.new("BindableEvent")
 	CoinInterrupt.Name = "CoinInterrupt"
 	CoinInterrupt.Parent = Npc
 
 	CoinInterrupt.Event:Connect(function(Coin: Instance)
-		if Coin:IsA("BasePart") then
-			selfInstance:CollectCoin(Coin)
-		end
+		if not Coin:IsA("BasePart") then return end
+		
+		selfInstance:CollectCoin(Coin)
 	end)
 	
+	-- There is a variable attribute for NPC for balance - so 1 NPC can collect only 1 Coin
 	Npc:SetAttribute("IsDiverted", false)
 	
 	return (selfInstance :: any) :: NoobEntity
@@ -115,7 +115,7 @@ function NoobEntity.ResetNetworkOwner(Npc: Instance)
 	end)
 end
 
--- Customizing NPC for visual differences by loading randomized table arrays
+-- Customizing NPC for visual differences by loading randomized table arrays with already existing clothing
 function NoobEntity.Customize(self: NoobEntity)
 	local Npc = self.Instance
 	if #HairTable > 0 then
@@ -135,7 +135,7 @@ function NoobEntity.Customize(self: NoobEntity)
 	NoobEntity.ResetNetworkOwner(Npc)
 end
 
--- Triggers temporary head part color, to visually output current NPC state
+-- Triggers temporary head part color, to visually output current NPC state + to make it more clear for the player
 function NoobEntity.FlashHeadColor(self: NoobEntity, TargetColor: Color3, Duration: number)
 	local Head = self.Instance:FindFirstChild("Head") :: BasePart?
 	if not Head then return end
@@ -146,7 +146,7 @@ function NoobEntity.FlashHeadColor(self: NoobEntity, TargetColor: Color3, Durati
 	Head.Color = OldColor
 end
 
--- This function used for NPC to collect a coin, that's generated on the map
+-- This function used for NPC to collect a coin, that's generated on the map. It's connected to NoobEntity for more structured work
 function NoobEntity.CollectCoin(self: NoobEntity, Coin: BasePart)
 	if self.IsDiverted then return end
 	self.IsDiverted = true -- Pausing the main route to complete this function
@@ -188,16 +188,14 @@ function NoobEntity.NavigateTo(self: NoobEntity, TargetPos: Vector3)
 		local Waypoints = Path:GetWaypoints()
 		for _, Waypoint in ipairs(Waypoints) do
 			self.Humanoid:MoveTo(Waypoint.Position)
-			if Waypoint.Action == Enum.PathWaypointAction.Jump then
-				self.Humanoid.Jump = true
-			end
+			if Waypoint.Action == Enum.PathWaypointAction.Jump then self.Humanoid.Jump = true end
 			self.Humanoid.MoveToFinished:Wait()
 			
 			-- Pause check! If during the movement coins collect function is called, this function will pause until other ones is finished
-			if self.IsDiverted then
-				while self.IsDiverted do task.wait(0.1) end
-				return self:NavigateTo(TargetPos)
-			end
+			if not self.IsDiverted then continue end
+			
+			while self.IsDiverted do task.wait(0.1) end
+			return self:NavigateTo(TargetPos)
 		end
 	else
 		-- Or standart MoveTo to target position
@@ -270,7 +268,6 @@ function NoobEntity.HandleBenchSitting(self: NoobEntity, Bench: Instance)
 
 	SelectedSeat:Sit(self.Humanoid)
 	task.wait(2)
-
 	SelectedSeat.Color = Color3.fromRGB(124, 92, 70)
 
 	self.Humanoid.Sit = false
@@ -435,55 +432,58 @@ local function GetRandomPointInZone(ZonePart: BasePart): Vector3
 	return ZonePart.CFrame:PointToWorldSpace(RandomOffset)
 end
 
+-- Function for already created coin, to reduce part of responsibility of "SpawnCoin" function
+local function WorkingCoin(Coin:BasePart, DeltaTime:number)
+	Coin.CFrame *= CFrame.Angles(0, 0, math.rad(90 * DeltaTime))
+
+	-- If the coin is free - it's looking for closest customer
+	for _, Npc in NoobsOnMap:GetChildren() do
+		if Npc:GetAttribute("IsDiverted") then continue end
+
+		local RootPart = Npc:FindFirstChild("HumanoidRootPart") :: BasePart?
+
+		-- Checking radius by the distance between NPC and coin, if it's less than 25 studs - coin can be collected
+		if not (RootPart and (RootPart.Position - Coin.Position).Magnitude <= 25) then continue end
+		local InterruptEvent = Npc:FindFirstChild("CoinInterrupt") :: BindableEvent?
+
+		if not InterruptEvent then continue end
+		Coin:SetAttribute("Targeted", true) -- Enabling coin debounce
+
+		-- If NPC in 8 seconds didn't took the coin, debounce is disabled, to avoid bugs
+		task.delay(8, function()
+			if not (Coin and Coin.Parent) then return end
+			Coin:SetAttribute("Targeted", false)
+		end)
+
+		task.spawn(function()
+			InterruptEvent:Fire(Coin)
+		end)
+
+		break
+	end
+end
+
 -- Function to spawn a coin at the random point in the CoinsZone, created for more NPC's interactions with the world (not only shops and benches)
 function SpawnCoin()
 	local Coin: BasePart = ServerStorage.Coin:Clone()
 	local RandomPoint = GetRandomPointInZone(CoinsZonePart)
 
-	if RandomPoint then
-		Coin.Position = RandomPoint + Vector3.new(0, 2, 0)
-		Coin.Anchored = true
-		Coin.CanCollide = false
-		Coin.Parent = CoinsFolder
+	if not RandomPoint then Coin:Destroy() return end
 
-		-- Spinning + checking for customers
-		local SpinConnection = RunService.Heartbeat:Connect(function(DeltaTime: number)
-			Coin.CFrame *= CFrame.Angles(0, 0, math.rad(90 * DeltaTime))
+	Coin.Position = RandomPoint + Vector3.new(0, 2, 0)
+	Coin.Anchored = true
+	Coin.CanCollide = false
+	Coin.Parent = CoinsFolder
 
-			-- If the coin is free - it's looking for closest customer
-			for _, Npc in NoobsOnMap:GetChildren() do
-				if Npc:GetAttribute("IsDiverted") then continue end
-				
-				local RootPart = Npc:FindFirstChild("HumanoidRootPart") :: BasePart?
+	-- Spinning + checking for customers
+	local SpinConnection = RunService.Heartbeat:Connect(function(DeltaTime)
+		WorkingCoin(Coin, DeltaTime)
+	end)
 
-				-- Checking radius
-				if not (RootPart and (RootPart.Position - Coin.Position).Magnitude <= 25) then continue end
-				local InterruptEvent = Npc:FindFirstChild("CoinInterrupt") :: BindableEvent?
-
-				if not InterruptEvent then continue end
-				Coin:SetAttribute("Targeted", true) -- Enabling coin debounce
-
-				-- If NPC in 8 seconds didn't took the coin, debounce is disabled
-				task.delay(8, function()
-					if not (Coin and Coin.Parent) then return end
-					Coin:SetAttribute("Targeted", false)
-				end)
-
-				task.spawn(function()
-					InterruptEvent:Fire(Coin)
-				end)
-
-				break
-			end
-		end)
-		
-		-- Cleaning connection, so there is no memory leak
-		Coin.Destroying:Connect(function()
-			if SpinConnection then SpinConnection:Disconnect() end
-		end)
-	else
-		Coin:Destroy()
-	end
+	-- Cleaning connection, so there is no memory leak
+	Coin.Destroying:Connect(function()
+		if SpinConnection then SpinConnection:Disconnect() end
+	end)
 end
 
 -- Separate functions for each object type to reduce nesting
